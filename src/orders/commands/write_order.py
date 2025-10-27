@@ -14,6 +14,10 @@ from orders.models.order_item import OrderItem
 from stocks.commands.write_stock import check_in_items_to_stock, check_out_items_from_stock, update_stock_redis
 from db import get_sqlalchemy_session, get_redis_conn
 
+PAYMENT_API_BASE_URL = "http://api-gateway:8080/payments-api"
+PAYMENTS_ENDPOINT = f"{PAYMENT_API_BASE_URL}/payments"
+PAYMENT_PROCESS_ENDPOINT = f"{PAYMENT_API_BASE_URL}/payments/process/{{payment_id}}"
+
 logger = Logger.get_instance("add_order")
 
 def add_order(user_id: int, items: list):
@@ -105,21 +109,33 @@ def modify_order(order_id: int, is_paid: bool):
         session.close()
 
 def request_payment_link(order_id, total_amount, user_id):
-    payment_id = 0
     payment_transaction = {
         "user_id": user_id,
         "order_id": order_id,
         "total_amount": total_amount
     }
 
-    # TODO: Requête à POST /payments
-    print("")
-    response_from_payment_service = {}
+    try:
+        response_from_payment_service = requests.post(
+            PAYMENTS_ENDPOINT,
+            json=payment_transaction,
+            headers={"Content-Type": "application/json"},
+            timeout=5
+        )
+        response_from_payment_service.raise_for_status()
+    except requests.RequestException as exc:
+        raise RuntimeError("Unable to reach payment service") from exc
 
-    if True: # if response.ok
-        print(f"ID paiement: {payment_id}")
+    try:
+        payment_response = response_from_payment_service.json()
+    except ValueError as exc:
+        raise RuntimeError("Payment service returned invalid data") from exc
 
-    return f"http://api-gateway:8080/payments-api/payments/process/{payment_id}" 
+    payment_id = payment_response.get("payment_id")
+    if not payment_id:
+        raise RuntimeError("Payment service response missing payment_id")
+
+    return PAYMENT_PROCESS_ENDPOINT.format(payment_id=payment_id)
 
 def delete_order(order_id: int):
     """Delete order in MySQL, keep Redis in sync"""
